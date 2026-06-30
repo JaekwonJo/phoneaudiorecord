@@ -33,6 +33,7 @@ namespace PhoneAudioRecorder
         private Button checkButton;
         private Button folderButton;
         private CheckBox autoStopBox;
+        private NumericUpDown silenceSecondsBox;
 
         private Process recorderProcess;
         private string currentOutputFile;
@@ -40,6 +41,7 @@ namespace PhoneAudioRecorder
         private volatile bool monitorStopRequested;
         private Thread audioMonitorThread;
         private DateTime lastSoundAt;
+        private int silenceSeconds = 10;
         private bool heardSound;
         private bool stoppingForSilence;
         private bool pendingFinish;
@@ -159,10 +161,20 @@ namespace PhoneAudioRecorder
 
             autoStopBox = new CheckBox
             {
-                Text = "첫 소리 이후 10초 무음이면 일시정지",
+                Text = "첫 소리 이후 무음이면 일시정지",
                 AutoSize = true,
                 Location = new Point(36, 372),
                 Checked = true
+            };
+
+            var silenceLabel = new Label { Text = "무음 시간(초)", AutoSize = true, Location = new Point(312, 372) };
+            silenceSecondsBox = new NumericUpDown
+            {
+                Location = new Point(410, 368),
+                Width = 80,
+                Minimum = 3,
+                Maximum = 300,
+                Value = 10
             };
 
             hintLabel = new Label
@@ -211,7 +223,7 @@ namespace PhoneAudioRecorder
                 title, subtitle, saveLabel, saveFolderBox, folderButton,
                 formatLabel, formatBox, sourceLabel, sourceBox,
                 checkButton, startButton, stopButton, finishButton, openButton,
-                autoStopBox,
+                autoStopBox, silenceLabel, silenceSecondsBox,
                 hintLabel, statusLabel, fileLabel, logBox
             });
 
@@ -234,6 +246,7 @@ namespace PhoneAudioRecorder
             formatBox.SelectedIndex = 0;
             sourceBox.SelectedIndex = 0;
             autoStopBox.Checked = true;
+            silenceSecondsBox.Value = 10;
 
             try
             {
@@ -269,6 +282,16 @@ namespace PhoneAudioRecorder
                     {
                         autoStopBox.Checked = value == "true";
                     }
+                    else if (key == "silenceSeconds")
+                    {
+                        decimal seconds;
+                        if (decimal.TryParse(value, out seconds))
+                        {
+                            if (seconds < silenceSecondsBox.Minimum) seconds = silenceSecondsBox.Minimum;
+                            if (seconds > silenceSecondsBox.Maximum) seconds = silenceSecondsBox.Maximum;
+                            silenceSecondsBox.Value = seconds;
+                        }
+                    }
                 }
             }
             catch
@@ -278,6 +301,7 @@ namespace PhoneAudioRecorder
             formatBox.SelectedIndexChanged += (s, e) => SaveSettings();
             sourceBox.SelectedIndexChanged += (s, e) => SaveSettings();
             autoStopBox.CheckedChanged += (s, e) => SaveSettings();
+            silenceSecondsBox.ValueChanged += (s, e) => SaveSettings();
         }
 
         private void SetComboIndex(ComboBox combo, string value)
@@ -298,7 +322,8 @@ namespace PhoneAudioRecorder
                     "saveFolder=" + saveFolderBox.Text.Trim(),
                     "formatIndex=" + formatBox.SelectedIndex,
                     "sourceIndex=" + sourceBox.SelectedIndex,
-                    "autoStop=" + (autoStopBox.Checked ? "true" : "false")
+                    "autoStop=" + (autoStopBox.Checked ? "true" : "false"),
+                    "silenceSeconds=" + (int)silenceSecondsBox.Value
                 };
                 File.WriteAllLines(configPath, lines, Encoding.UTF8);
             }
@@ -451,6 +476,7 @@ namespace PhoneAudioRecorder
                 finishButton.Enabled = true;
                 checkButton.Enabled = false;
                 autoStopBox.Enabled = false;
+                silenceSecondsBox.Enabled = false;
                 SetStatus("녹음 중입니다. 폰에서 Gemini 음성을 재생하세요.");
                 fileLabel.Text = "최종 파일: " + finalOutputFile;
                 StartAudioMonitorIfNeeded();
@@ -579,6 +605,7 @@ namespace PhoneAudioRecorder
             stopButton.Enabled = false;
             checkButton.Enabled = true;
             autoStopBox.Enabled = true;
+            silenceSecondsBox.Enabled = true;
             StopAudioMonitor();
 
             if (!string.IsNullOrEmpty(currentOutputFile) && File.Exists(currentOutputFile))
@@ -596,7 +623,7 @@ namespace PhoneAudioRecorder
                     return;
                 }
 
-                SetStatus(stoppingForSilence ? "10초 무음 감지로 일시정지됨. 이어 녹음 또는 최종 저장을 선택하세요." : "일시정지됨. 이어 녹음 또는 최종 저장을 선택하세요.");
+                SetStatus(stoppingForSilence ? ((int)silenceSecondsBox.Value).ToString() + "초 무음 감지로 일시정지됨. 이어 녹음 또는 최종 저장을 선택하세요." : "일시정지됨. 이어 녹음 또는 최종 저장을 선택하세요.");
                 stoppingForSilence = false;
                 pendingPause = false;
                 finishButton.Enabled = true;
@@ -626,6 +653,7 @@ namespace PhoneAudioRecorder
         {
             monitorStopRequested = false;
             monitorRequested = autoStopBox.Checked;
+            silenceSeconds = (int)silenceSecondsBox.Value;
             heardSound = false;
             lastSoundAt = DateTime.Now;
 
@@ -637,7 +665,7 @@ namespace PhoneAudioRecorder
             audioMonitorThread = new Thread(AudioMonitorWorker);
             audioMonitorThread.IsBackground = true;
             audioMonitorThread.Start();
-            AppendLog("무음 감지 시작: 첫 소리 이후 10초 무음이면 자동 중지");
+            AppendLog("무음 감지 시작: 첫 소리 이후 " + silenceSeconds.ToString() + "초 무음이면 일시정지");
         }
 
         private void StopAudioMonitor()
@@ -661,19 +689,19 @@ namespace PhoneAudioRecorder
                         {
                             if (!heardSound)
                             {
-                                BeginInvoke(new Action(() => AppendLog("첫 소리 감지됨. 이제부터 10초 무음을 감시합니다.")));
+                                BeginInvoke(new Action(() => AppendLog("첫 소리 감지됨. 이제부터 " + silenceSeconds.ToString() + "초 무음을 감시합니다.")));
                             }
                             heardSound = true;
                             lastSoundAt = DateTime.Now;
                         }
-                        else if (heardSound && (DateTime.Now - lastSoundAt).TotalSeconds >= 10)
+                        else if (heardSound && (DateTime.Now - lastSoundAt).TotalSeconds >= silenceSeconds)
                         {
                             BeginInvoke(new Action(() =>
                             {
                                 if (recorderProcess != null && !recorderProcess.HasExited)
                                 {
                                     stoppingForSilence = true;
-                                    AppendLog("10초 무음 감지. 녹음을 일시정지합니다.");
+                                    AppendLog(silenceSeconds.ToString() + "초 무음 감지. 녹음을 일시정지합니다.");
                                     StopCurrentSegment(false, true);
                                 }
                             }));
@@ -716,6 +744,7 @@ namespace PhoneAudioRecorder
             finishButton.Enabled = false;
             checkButton.Enabled = false;
             autoStopBox.Enabled = false;
+            silenceSecondsBox.Enabled = false;
             SetStatus("최종 파일을 저장하는 중입니다...");
 
             try
@@ -756,6 +785,7 @@ namespace PhoneAudioRecorder
                 finishButton.Enabled = true;
                 checkButton.Enabled = true;
                 autoStopBox.Enabled = true;
+                silenceSecondsBox.Enabled = true;
             }
             finally
             {
@@ -851,6 +881,7 @@ namespace PhoneAudioRecorder
             finishButton.Enabled = false;
             checkButton.Enabled = true;
             autoStopBox.Enabled = true;
+            silenceSecondsBox.Enabled = true;
         }
 
         private string RunAndRead(string fileName, string arguments, int timeoutMs)
